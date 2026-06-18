@@ -44,6 +44,9 @@ class Config:
     # Logging
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
 
+    # Proxy
+    proxy_url: str = field(default_factory=lambda: os.getenv("PROXY_URL", ""))
+
     def validate(self) -> None:
         """Raise ValueError if critical settings are missing."""
         if not self.bot_token:

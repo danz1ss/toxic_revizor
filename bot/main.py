@@ -43,17 +43,25 @@ async def main() -> None:
     logger = logging.getLogger(__name__)
 
     logger.info("=" * 50)
-    logger.info("  🤖 Токсичный Ревизор — запуск!")
+    logger.info("  [BOT] Токсичный Ревизор — запуск!")
     logger.info("  LLM Provider: %s", config.llm_provider)
     logger.info("=" * 50)
 
     # Create LLM client
     llm_client = create_llm_client(config)
 
+    # Setup proxy if provided
+    session = None
+    if config.proxy_url:
+        from aiogram.client.session.aiohttp import AiohttpSession
+        session = AiohttpSession(proxy=config.proxy_url)
+        logger.info(f"  Proxy configured: {config.proxy_url}")
+
     # Create bot and dispatcher
     bot = Bot(
         token=config.bot_token,
         default=DefaultBotProperties(parse_mode=None),
+        session=session,
     )
     dp = Dispatcher()
 

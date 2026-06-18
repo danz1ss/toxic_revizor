@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import re
 from abc import ABC, abstractmethod
 
 from PIL import Image
@@ -48,6 +49,9 @@ def prepare_image(image_bytes: bytes, max_size: int = 1600) -> tuple[bytes, str]
     img.save(buf, format="JPEG", quality=85)
     return buf.getvalue(), "image/jpeg"
 
+def clean_response(text: str) -> str:
+    """Remove <thought>...</thought> blocks from the response."""
+    return re.sub(r'<thought>.*?</thought>', '', text, flags=re.DOTALL).strip()
 
 # ─────────────────────────────────────────────────────
 # Abstract base
@@ -109,7 +113,7 @@ class GeminiClient(BaseLLMClient):
                 max_output_tokens=self._max_tokens,
             ),
         )
-        return response.text or "🤖 Что-то пошло не так, ответ пустой."
+        return clean_response(response.text) if response.text else "🤖 Что-то пошло не так, ответ пустой."
 
     async def analyze_text(self, text: str) -> str:
         from google.genai import types
@@ -130,7 +134,7 @@ class GeminiClient(BaseLLMClient):
                 max_output_tokens=self._max_tokens,
             ),
         )
-        return response.text or "🤖 Что-то пошло не так, ответ пустой."
+        return clean_response(response.text) if response.text else "🤖 Что-то пошло не так, ответ пустой."
 
 
 # ─────────────────────────────────────────────────────
@@ -180,7 +184,8 @@ class OpenAIClient(BaseLLMClient):
                 },
             ],
         )
-        return response.choices[0].message.content or "🤖 Что-то пошло не так."
+        ans = response.choices[0].message.content
+        return clean_response(ans) if ans else "🤖 Что-то пошло не так."
 
     async def analyze_text(self, text: str) -> str:
         response = await self._client.chat.completions.create(
@@ -192,7 +197,8 @@ class OpenAIClient(BaseLLMClient):
                 {"role": "user", "content": f"{TEXT_TASK_PROMPT}\n\n---\n\n{text}"},
             ],
         )
-        return response.choices[0].message.content or "🤖 Что-то пошло не так."
+        ans = response.choices[0].message.content
+        return clean_response(ans) if ans else "🤖 Что-то пошло не так."
 
 
 # ─────────────────────────────────────────────────────

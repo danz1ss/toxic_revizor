@@ -1,0 +1,15 @@
+services:
+  toxic-reviewer:
+    build: .
+    container_name: toxic-reviewer-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    # Uncomment to mount .env as a volume instead:
+    # volumes:
+    #   - ./.env:/app/.env:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
