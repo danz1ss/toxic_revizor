@@ -14,7 +14,7 @@ import logging
 import re
 from abc import ABC, abstractmethod
 
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 from bot.config import Config
 from bot.prompts import SYSTEM_PROMPT, TEXT_TASK_PROMPT
@@ -38,6 +38,13 @@ def prepare_image(image_bytes: bytes, max_size: int = 1600) -> tuple[bytes, str]
     if img.mode in ("RGBA", "P", "LA"):
         img = img.convert("RGB")
 
+    # Улучшаем читаемость (OCR) без затрат токенов:
+    # 1. Повышаем контрастность (убирает серые тени от телефона)
+    img = ImageEnhance.Contrast(img).enhance(1.5)
+    
+    # 2. Повышаем резкость (делает контуры ручки более чёткими)
+    img = ImageEnhance.Sharpness(img).enhance(2.0)
+
     # Resize if too large
     w, h = img.size
     if max(w, h) > max_size:
@@ -52,7 +59,13 @@ def prepare_image(image_bytes: bytes, max_size: int = 1600) -> tuple[bytes, str]
 
 def clean_response(text: str) -> str:
     """Remove <thought>...</thought> blocks from the response."""
-    return re.sub(r'<thought>.*?</thought>', '', text, flags=re.DOTALL).strip()
+    text = re.sub(r'<thought>.*?(?:</thought>|$)', '', text, flags=re.DOTALL).strip()
+    # Replace <br> and <p> tags with newlines, as Telegram HTML doesn't support them
+    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?p\s*>', '\n', text, flags=re.IGNORECASE)
+    # Remove markdown headers like ### just in case
+    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
+    return text.strip()
 
 # ─────────────────────────────────────────────────────
 # Abstract base

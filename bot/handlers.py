@@ -104,11 +104,14 @@ async def handle_photo(message: Message, llm_client: BaseLLMClient, memory: Memo
 
         # Delete "processing" message and send result
         await processing_msg.delete()
-        await message.reply(result, parse_mode="Markdown")
+        await message.reply(result, parse_mode="HTML")
 
     except Exception:
         logger.exception("Error processing photo")
-        await processing_msg.delete()
+        try:
+            await processing_msg.delete()
+        except Exception:
+            pass
         await message.reply(ERROR_MESSAGES["api_error"])
 
 
@@ -143,11 +146,14 @@ async def handle_document_image(message: Message, llm_client: BaseLLMClient, mem
             result = await llm_client.analyze_image(user_id, image_data, memory)
 
         await processing_msg.delete()
-        await message.reply(result, parse_mode="Markdown")
+        await message.reply(result, parse_mode="HTML")
 
     except Exception:
         logger.exception("Error processing document image")
-        await processing_msg.delete()
+        try:
+            await processing_msg.delete()
+        except Exception:
+            pass
         await message.reply(ERROR_MESSAGES["api_error"])
 
 
@@ -183,9 +189,12 @@ async def handle_text(message: Message, llm_client: BaseLLMClient, memory: Memor
             result = await llm_client.analyze_text(user_id, text, memory)
 
         await processing_msg.delete()
-        await message.reply(result, parse_mode="Markdown")
+        await message.reply(result, parse_mode="HTML")
 
     except Exception:
         logger.exception("Error processing text")
-        await processing_msg.delete()
+        try:
+            await processing_msg.delete()
+        except Exception:
+            pass
         await message.reply(ERROR_MESSAGES["api_error"])
