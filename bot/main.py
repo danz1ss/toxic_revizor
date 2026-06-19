@@ -18,6 +18,8 @@ from aiogram.client.default import DefaultBotProperties
 from bot.config import Config
 from bot.handlers import router
 from bot.llm_client import create_llm_client
+from bot.memory import MemoryManager
+from bot.middlewares import ThrottlingMiddleware
 
 
 def setup_logging(level: str) -> None:
@@ -68,8 +70,15 @@ async def main() -> None:
     # Register router
     dp.include_router(router)
 
-    # Inject llm_client into handler context
+    # Initialize MemoryManager
+    memory = MemoryManager()
+    
+    # Register middlewares
+    dp.message.middleware(ThrottlingMiddleware(limit_seconds=10))
+
+    # Inject dependencies into handler context
     dp["llm_client"] = llm_client
+    dp["memory"] = memory
 
     # Start polling
     logger.info("Bot is starting polling...")

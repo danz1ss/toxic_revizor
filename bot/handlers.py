@@ -14,7 +14,9 @@ from aiogram import F, Router
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 
+from aiogram.utils.chat_action import ChatActionSender
 from bot.prompts import ERROR_MESSAGES, PROCESSING_PHRASES
+from bot.memory import MemoryManager
 
 if TYPE_CHECKING:
     from bot.llm_client import BaseLLMClient
@@ -77,10 +79,11 @@ async def cmd_help(message: Message) -> None:
 # ─────────────────────────────────────────────────────
 
 @router.message(F.photo)
-async def handle_photo(message: Message, llm_client: BaseLLMClient) -> None:
+async def handle_photo(message: Message, llm_client: BaseLLMClient, memory: MemoryManager) -> None:
     """Process a photo of homework."""
     # Send a fun "processing" message
     processing_msg = await message.answer(random.choice(PROCESSING_PHRASES))
+    user_id = message.from_user.id if message.from_user else 0
 
     try:
         # Get the highest resolution photo
@@ -95,8 +98,9 @@ async def handle_photo(message: Message, llm_client: BaseLLMClient) -> None:
             len(image_data),
         )
 
-        # Analyze with LLM
-        result = await llm_client.analyze_image(image_data)
+        # Analyze with LLM and chat action
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+            result = await llm_client.analyze_image(user_id, image_data, memory)
 
         # Delete "processing" message and send result
         await processing_msg.delete()
@@ -113,9 +117,10 @@ async def handle_photo(message: Message, llm_client: BaseLLMClient) -> None:
 # ─────────────────────────────────────────────────────
 
 @router.message(F.document.mime_type.startswith("image/"))
-async def handle_document_image(message: Message, llm_client: BaseLLMClient) -> None:
+async def handle_document_image(message: Message, llm_client: BaseLLMClient, memory: MemoryManager) -> None:
     """Process images sent as documents (uncompressed)."""
     processing_msg = await message.answer(random.choice(PROCESSING_PHRASES))
+    user_id = message.from_user.id if message.from_user else 0
 
     try:
         doc = message.document
@@ -134,7 +139,8 @@ async def handle_document_image(message: Message, llm_client: BaseLLMClient) -> 
             len(image_data),
         )
 
-        result = await llm_client.analyze_image(image_data)
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+            result = await llm_client.analyze_image(user_id, image_data, memory)
 
         await processing_msg.delete()
         await message.reply(result, parse_mode="Markdown")
@@ -150,11 +156,12 @@ async def handle_document_image(message: Message, llm_client: BaseLLMClient) -> 
 # ─────────────────────────────────────────────────────
 
 @router.message(F.text)
-async def handle_text(message: Message, llm_client: BaseLLMClient) -> None:
+async def handle_text(message: Message, llm_client: BaseLLMClient, memory: MemoryManager) -> None:
     """Process text messages — could be typed-out solutions."""
     text = message.text.strip()
     if not text:
         return
+    user_id = message.from_user.id if message.from_user else 0
 
     # Ignore very short messages (likely accidental)
     if len(text) < 5:
@@ -172,7 +179,8 @@ async def handle_text(message: Message, llm_client: BaseLLMClient) -> None:
             len(text),
         )
 
-        result = await llm_client.analyze_text(text)
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+            result = await llm_client.analyze_text(user_id, text, memory)
 
         await processing_msg.delete()
         await message.reply(result, parse_mode="Markdown")

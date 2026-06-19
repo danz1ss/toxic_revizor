@@ -18,6 +18,7 @@ from PIL import Image
 
 from bot.config import Config
 from bot.prompts import SYSTEM_PROMPT, TEXT_TASK_PROMPT
+from bot.memory import MemoryManager
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +62,12 @@ class BaseLLMClient(ABC):
     """Abstract LLM client interface."""
 
     @abstractmethod
-    async def analyze_image(self, image_bytes: bytes) -> str:
+    async def analyze_image(self, user_id: int, image_bytes: bytes, memory: MemoryManager) -> str:
         """Analyze a photo of homework and return sarcastic review."""
         ...
 
     @abstractmethod
-    async def analyze_text(self, text: str) -> str:
+    async def analyze_text(self, user_id: int, text: str, memory: MemoryManager) -> str:
         """Analyze text-based homework and return sarcastic review."""
         ...
 
@@ -87,54 +88,90 @@ class GeminiClient(BaseLLMClient):
         self._max_tokens = config.max_tokens
         self._max_image_size = config.max_image_size
 
-    async def analyze_image(self, image_bytes: bytes) -> str:
+    async def analyze_image(self, user_id: int, image_bytes: bytes, memory: MemoryManager) -> str:
         from google.genai import types
+        from google.genai.errors import APIError
 
         jpeg_bytes, mime = prepare_image(image_bytes, self._max_image_size)
 
-        response = await self._client.aio.models.generate_content(
-            model=self._model,
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part(
-                            inline_data=types.Blob(mime_type=mime, data=jpeg_bytes)
-                        ),
-                        types.Part(
-                            text="Проверь это решение. Найди ошибки и прокомментируй."
-                        ),
-                    ],
-                ),
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=self._temperature,
-                max_output_tokens=self._max_tokens,
-            ),
-        )
-        return clean_response(response.text) if response.text else "🤖 Что-то пошло не так, ответ пустой."
+        history = memory.get_history(user_id)
+        contents = []
+        for msg in history:
+            role = "user" if msg["role"] == "user" else "model"
+            contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
 
-    async def analyze_text(self, text: str) -> str:
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part(inline_data=types.Blob(mime_type=mime, data=jpeg_bytes)),
+                    types.Part(text="Проверь это решение. Найди ошибки и прокомментируй."),
+                ],
+            )
+        )
+
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    temperature=self._temperature,
+                    max_output_tokens=self._max_tokens,
+                ),
+            )
+            ans = clean_response(response.text) if response.text else "🤖 Что-то пошло не так, ответ пустой."
+            memory.add_message(user_id, "user", "[Фото решения]")
+            memory.add_message(user_id, "assistant", ans)
+            return ans
+        except APIError as e:
+            logger.error(f"Gemini API Error: {e}")
+            if "429" in str(e):
+                return "🛑 Мои нейроны перегружены из-за таких тупых задач. Зайди попозже!"
+            return "🤯 Кажется, от твоих решений даже у Гугла серваки упали. Попробуй еще раз."
+        except Exception:
+            logger.exception("Unexpected error in Gemini API")
+            return "😵 Упс, у меня что-то сломалось."
+
+    async def analyze_text(self, user_id: int, text: str, memory: MemoryManager) -> str:
         from google.genai import types
+        from google.genai.errors import APIError
 
-        response = await self._client.aio.models.generate_content(
-            model=self._model,
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part(text=f"{TEXT_TASK_PROMPT}\n\n---\n\n{text}"),
-                    ],
-                ),
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=self._temperature,
-                max_output_tokens=self._max_tokens,
-            ),
+        history = memory.get_history(user_id)
+        contents = []
+        for msg in history:
+            role = "user" if msg["role"] == "user" else "model"
+            contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[types.Part(text=f"{TEXT_TASK_PROMPT}\n\n---\n\n{text}")],
+            )
         )
-        return clean_response(response.text) if response.text else "🤖 Что-то пошло не так, ответ пустой."
+
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    temperature=self._temperature,
+                    max_output_tokens=self._max_tokens,
+                ),
+            )
+            ans = clean_response(response.text) if response.text else "🤖 Что-то пошло не так, ответ пустой."
+            memory.add_message(user_id, "user", text)
+            memory.add_message(user_id, "assistant", ans)
+            return ans
+        except APIError as e:
+            logger.error(f"Gemini API Error: {e}")
+            if "429" in str(e):
+                return "🛑 Мои нейроны перегружены из-за таких тупых задач. Зайди попозже!"
+            return "🤯 Кажется, от твоих решений даже у Гугла серваки упали. Попробуй еще раз."
+        except Exception:
+            logger.exception("Unexpected error in Gemini API")
+            return "😵 Упс, у меня что-то сломалось."
 
 
 # ─────────────────────────────────────────────────────
@@ -156,49 +193,79 @@ class OpenAIClient(BaseLLMClient):
         self._max_tokens = config.max_tokens
         self._max_image_size = config.max_image_size
 
-    async def analyze_image(self, image_bytes: bytes) -> str:
+    async def analyze_image(self, user_id: int, image_bytes: bytes, memory: MemoryManager) -> str:
+        import openai
         jpeg_bytes, mime = prepare_image(image_bytes, self._max_image_size)
         b64 = base64.b64encode(jpeg_bytes).decode()
 
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            temperature=self._temperature,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        for msg in memory.get_history(user_id):
+            messages.append({"role": msg["role"], "content": msg["content"]})
+
+        messages.append({
+            "role": "user",
+            "content": [
                 {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime};base64,{b64}",
-                                "detail": "high",
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": "Проверь это решение. Найди ошибки и прокомментируй.",
-                        },
-                    ],
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime};base64,{b64}",
+                        "detail": "high",
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": "Проверь это решение. Найди ошибки и прокомментируй.",
                 },
             ],
-        )
-        ans = response.choices[0].message.content
-        return clean_response(ans) if ans else "🤖 Что-то пошло не так."
+        })
 
-    async def analyze_text(self, text: str) -> str:
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            temperature=self._temperature,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"{TEXT_TASK_PROMPT}\n\n---\n\n{text}"},
-            ],
-        )
-        ans = response.choices[0].message.content
-        return clean_response(ans) if ans else "🤖 Что-то пошло не так."
+        try:
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                max_tokens=self._max_tokens,
+                temperature=self._temperature,
+                messages=messages,
+            )
+            ans = response.choices[0].message.content
+            cleaned_ans = clean_response(ans) if ans else "🤖 Что-то пошло не так."
+            memory.add_message(user_id, "user", "[Фото решения]")
+            memory.add_message(user_id, "assistant", cleaned_ans)
+            return cleaned_ans
+        except openai.RateLimitError:
+            return "🛑 Мои нейроны перегружены из-за таких тупых задач. Зайди попозже!"
+        except openai.APIError:
+            return "🤯 Кажется, от твоих решений даже у OpenAI серваки упали. Попробуй еще раз."
+        except Exception:
+            logger.exception("Unexpected error in OpenAI API")
+            return "😵 Упс, у меня что-то сломалось."
+
+    async def analyze_text(self, user_id: int, text: str, memory: MemoryManager) -> str:
+        import openai
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        for msg in memory.get_history(user_id):
+            messages.append({"role": msg["role"], "content": msg["content"]})
+            
+        messages.append({"role": "user", "content": f"{TEXT_TASK_PROMPT}\n\n---\n\n{text}"})
+
+        try:
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                max_tokens=self._max_tokens,
+                temperature=self._temperature,
+                messages=messages,
+            )
+            ans = response.choices[0].message.content
+            cleaned_ans = clean_response(ans) if ans else "🤖 Что-то пошло не так."
+            memory.add_message(user_id, "user", text)
+            memory.add_message(user_id, "assistant", cleaned_ans)
+            return cleaned_ans
+        except openai.RateLimitError:
+            return "🛑 Мои нейроны перегружены из-за таких тупых задач. Зайди попозже!"
+        except openai.APIError:
+            return "🤯 Кажется, от твоих решений даже у OpenAI серваки упали. Попробуй еще раз."
+        except Exception:
+            logger.exception("Unexpected error in OpenAI API")
+            return "😵 Упс, у меня что-то сломалось."
 
 
 # ─────────────────────────────────────────────────────
